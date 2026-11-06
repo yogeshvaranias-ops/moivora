@@ -204,7 +204,7 @@ h2{font-family:var(--display);font-size:30px;margin-bottom:6px}
     <svg class="tick" viewBox="0 0 120 120"><circle cx="60" cy="60" r="52"/><path d="M36 62l16 16 32-34"/></svg>
     <h3 id="doneT">Welcome to MOIVORA</h3>
     <p>Taking you to your dashboard…</p>
-    <button class="cta" id="replay" type="button">Replay login</button>
+    
   </div>
 </div>
 <div id="toasts" aria-live="polite"></div>
@@ -297,13 +297,23 @@ $('#form').addEventListener('submit',e=>{
   if(!(v1&&v2&&v3)){toast('Please fix the highlighted fields.');return}
   try{$('#rem').checked?localStorage.setItem('moivora_id',id):localStorage.removeItem('moivora_id')}catch(_){}
   const b=$('#submit');b.disabled=true;b.classList.add('loading');
-  setTimeout(()=>{ /* replace with real API call: POST /api/auth/login */
+  fetch(reg?'/api/auth/register':'/api/auth/login',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:n,identifier:id,password:pw})
+  })
+  .then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.message||'Something went wrong');return d})
+  .then(d=>{
+    try{localStorage.setItem('moivora_token',d.token)}catch(_){}
     b.classList.remove('loading');b.disabled=false;
-    $('#doneT').textContent=reg?'Account created':'Welcome to MOIVORA';
+    $('#doneT').textContent=reg?'Account created':'Welcome, '+(d.name||'to MOIVORA');
     $('#done').classList.add('show');toast(reg?'Account created successfully.':'Login successful.');
-  },1500);
+    setTimeout(()=>{location.href='/app.html'},2200);
+  })
+  .catch(err=>{
+    b.classList.remove('loading');b.disabled=false;
+    toast(err.message==='Failed to fetch'?'Server not reachable. Start the backend first.':err.message);
+  });
 });
-$('#replay').onclick=()=>{$('#done').classList.remove('show');$('#pw').value=''};
 
 /* forgot password */
 $('#forgot').onclick=()=>{$('#authView').classList.add('hidden');$('#forgotView').classList.remove('hidden');$('#fid').focus()};
