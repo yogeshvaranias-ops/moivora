@@ -88,3 +88,18 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 
 @media(max-width:900px){body{padding-left:0}#side{transform:translateX(-100%);width:260px}body.open #side{transform:none}body.open #scrim{display:block}body.collapsed .brand b,body.collapsed .nav span{display:inline}.f{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 @media print{#side,.top,.acts,.btn{display:none!important}body{padding:0}}
+
+.tw{overflow-x:auto}.tbl{width:100%;border-collapse:collapse;min-width:760px}
+.tbl th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:14px 16px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:13px 16px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
+.tbl tr:last-child td{border:0}.tbl tbody tr:hover td{background:rgba(139,92,246,.07)}
+.tbl small{display:block;color:var(--muted);font-size:12px}.tbl .r{text-align:right}.tbl .ra,.ra{display:flex;gap:6px;justify-content:flex-end;align-items:center}
+.ibtn.sm{width:34px;height:34px;border-radius:10px}.ibtn.sm .ic{width:16px;height:16px}.ibtn.danger:hover{color:var(--err);border-color:var(--err)}
+.rc{max-width:420px;background:#fff;color:#161238}.rc .rh{text-align:center;border-bottom:2px dashed #d9c9a0;padding-bottom:14px;margin-bottom:10px}
+.rc .rh b{font-family:var(--disp);letter-spacing:.18em;font-size:26px;color:#b97b06;display:block}.rc .rh small{color:#67648f}
+.rc .row2{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:14px;border-bottom:1px solid #eee}.rc .row2 span:first-child{color:#67648f}
+.rc .ramt{text-align:center;font-size:36px;font-weight:700;margin:18px 0 8px}.rc .thx{text-align:center;color:#67648f;font-size:13px}
+@media print{body.printing .main,body.printing #side,body.printing #toasts,body.printing .noprint{display:none!important}
+body.printing #modal{position:static;background:#fff;padding:0;backdrop-filter:none;display:block}body.printing .dlg{border:0;max-width:none;box-shadow:none;animation:none}}
+
+body.adm .gs,body.adm #bell,body.adm #bellMenu{display:none}body.adm #burger{margin-right:auto}

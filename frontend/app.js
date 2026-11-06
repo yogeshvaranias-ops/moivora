@@ -21,6 +21,13 @@ const I = {
   out:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   pin:'<path d="M12 22s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"/><circle cx="12" cy="10" r="2.5"/>', back:'<path d="M19 12H5M12 19l-7-7 7-7"/>'
 };
+Object.assign(I, {
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
+  print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z"/>',
+  hist: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L21 2M16 7l3 3"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>'
+});
 const ic = n => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
 
 let token = localStorage.getItem('moivora_token'), user = null, events = [], q = '', fType = '', fStatus = '', charts = [], timers = [];
@@ -61,8 +68,10 @@ function countUp(el, to, money) {
 }
 
 /* ---------- chrome: sidebar, topbar, theme ---------- */
-const NAV = [['#/dashboard', 'home', 'Dashboard'], ['#/events', 'cal', 'Events']];
-$('#nav').innerHTML = NAV.map(([h, i, l]) => `<a class="nav" href="${h}" data-h="${h}">${ic(i)}<span>${l}</span></a>`).join('');
+function renderNav() {
+  const NAV = user && user.role === 'admin' ? [['#/admin', 'shield', 'Admin']] : [['#/dashboard', 'home', 'Dashboard'], ['#/events', 'cal', 'Events'], ['#/moi', 'wallet', 'Moi']];
+  $('#nav').innerHTML = NAV.map(([h, i, l]) => `<a class="nav" href="${h}" data-h="${h}">${ic(i)}<span>${l}</span></a>`).join('');
+}
 $('#logout').innerHTML = ic('out') + '<span>Logout</span>';
 $('#logout').onclick = logout;
 $('#burger').innerHTML = ic('menu'); $('#gsIc').innerHTML = ic('search'); $('#bell').innerHTML = ic('bell');
@@ -76,6 +85,7 @@ document.addEventListener('click', () => $$('.dd').forEach(x => x.classList.remo
 $('#gs').addEventListener('input', e => { q = e.target.value; if (location.hash !== '#/events') location.hash = '#/events'; else renderGrid(); });
 
 function renderChrome() {
+  document.body.classList.toggle('adm', user.role === 'admin');
   $('#avatar').textContent = (user.full_name || '?')[0].toUpperCase();
   $('#userMenu').innerHTML = `<div class="row"><div><b>${esc(user.full_name)}</b><small>${esc(user.identifier)} · ${esc(user.role)}</small></div></div><button class="row" id="um-out">${ic('out')} Logout</button>`;
   $('#um-out').onclick = logout;
@@ -89,9 +99,11 @@ async function loadEvents() { events = await api('/api/events'); if (user) rende
 function route() {
   charts.forEach(c => c.destroy()); charts = []; timers.forEach(clearInterval); timers = [];
   document.body.classList.remove('open');
+  const isAdmin = user && user.role === 'admin';
+  if (isAdmin && location.hash !== '#/admin') { location.replace('#/admin'); return; }
   const h = location.hash || '#/dashboard', m = h.match(/^#\/events\/(\d+)$/);
   $$('.nav[data-h]').forEach(a => a.classList.toggle('on', h.startsWith(a.dataset.h)));
-  const go = m ? eventPage(m[1]) : h === '#/events' ? eventsPage() : dashboard();
+  const go = m ? eventPage(m[1]) : h === '#/events' ? eventsPage() : h === '#/moi' ? moiPage() : h === '#/admin' ? adminPage() : dashboard();
   go.catch(e => { view.innerHTML = `<div class="panel empty"><span class="big">⚠️</span>${esc(e.message)}</div>`; });
 }
 addEventListener('hashchange', route);
@@ -104,7 +116,7 @@ async function dashboard() {
   const next = d.upcoming[0];
   view.innerHTML = `<div class="page">
     <div class="head"><div><h1>Welcome, ${esc(user.full_name.split(' ')[0])} 👋</h1><p class="muted">Celebrate Moments. Manage Memories.</p></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="qa-new">${ic('plus')} New event</button><a class="btn ghost" href="#/events">${ic('cal')} View events</a></div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="qa-new">${ic('plus')} New event</button><button class="btn" id="qa-moi">${ic('plus')} Add moi</button><a class="btn ghost" href="#/events">${ic('cal')} View events</a></div></div>
     <div class="stats">${cards.map(([l, v, i, c, mny], k) => `<div class="stat" style="--c:${c};animation:rise .5s ${k * .06}s both"><div class="i">${ic(i)}</div><span>${l}</span><b data-n="${v}" data-m="${mny ? 1 : 0}">0</b></div>`).join('')}</div>
     <div class="grid2">
       <div class="panel"><h2>Monthly collection</h2><div class="chart"><canvas id="cMonth"></canvas></div></div>
@@ -117,7 +129,7 @@ async function dashboard() {
         <h2 style="margin-top:18px">Recent transactions</h2>${d.transactions.length ? d.transactions.map(x => `<div class="item"><span class="dot">${x.kind === 'credit' ? '⬆️' : '⬇️'}</span><div class="t"><b>${esc(x.title)}</b><small>${fmtDate(x.date)}</small></div><span class="${x.kind === 'credit' ? 'cr' : 'db'}">${x.kind === 'credit' ? '+' : '-'}${inr(x.amount)}</span></div>`).join('') : '<p class="muted">No transactions yet.</p>'}</div>
     </div></div>`;
   $$('[data-n]').forEach(el => countUp(el, +el.dataset.n, +el.dataset.m));
-  $('#qa-new').onclick = () => openForm();
+  $('#qa-new').onclick = () => openForm(); $('#qa-moi').onclick = () => openMoiForm();
   if (next) countdown($('#cd'), next);
   if (typeof Chart === 'undefined') return;
   const cs = getComputedStyle(document.body), muted = cs.getPropertyValue('--muted').trim(), line = cs.getPropertyValue('--line').trim();
@@ -171,11 +183,11 @@ async function eventPage(id) {
       <div><small>Location</small><b>${esc(e.location)}</b></div><div><small>Host</small><b>${esc(e.host_name)}</b></div>
       <div><small>Contact</small><b>${esc(e.contact)}</b></div></div>
       ${e.description ? `<p style="margin-top:16px;line-height:1.6">${esc(e.description)}</p>` : ''}
-      <div class="acts" style="margin-top:18px"><button class="btn" id="d-edit">${ic('edit')} Edit</button><button class="btn ghost danger" id="d-del">${ic('trash')} Delete</button><button class="btn ghost" onclick="print()">Print</button></div></div>
+      <div class="acts" style="margin-top:18px"><button class="btn" id="d-edit">${ic('edit')} Edit</button><button class="btn ghost" id="d-moi">${ic('plus')} Add moi</button><button class="btn ghost danger" id="d-del">${ic('trash')} Delete</button><button class="btn ghost" onclick="print()">Print</button></div></div>
     <div class="panel"><h2>Countdown</h2><div class="cd" id="cd"></div>
       <div class="kv" style="margin-top:14px"><div><small>Contributors</small><b>${e.contributors}</b></div><div><small>Moi collected</small><b>${inr(e.moi)}</b></div><div><small>Expenses</small><b>${inr(e.expenses)}</b></div><div><small>Balance</small><b>${inr(e.moi - e.expenses)}</b></div></div></div></div></div>`;
   countdown($('#cd'), e);
-  $('#d-edit').onclick = () => openForm(e);
+  $('#d-edit').onclick = () => openForm(e); $('#d-moi').onclick = () => openMoiForm(null, e.id);
   $('#d-del').onclick = () => removeEvent(e.id, true);
 }
 
@@ -184,9 +196,9 @@ const modal = $('#modal');
 function closeModal() { modal.hidden = true; modal.innerHTML = ''; }
 modal.addEventListener('mousedown', e => { if (e.target === modal) closeModal(); });
 addEventListener('keydown', e => { if (e.key === 'Escape' && !modal.hidden) closeModal(); });
-function confirmBox(msg) {
+function confirmBox(msg, label = 'Delete', icon = '🗑️') {
   return new Promise(res => {
-    modal.innerHTML = `<div class="dlg sm" role="alertdialog" aria-modal="true"><div style="font-size:42px">🗑️</div><h2 style="margin:10px 0">${esc(msg)}</h2><p class="muted">This cannot be undone.</p><div class="acts" style="justify-content:center;margin-top:20px"><button class="btn ghost" id="no">Cancel</button><button class="btn" id="yes" style="background:var(--err);color:#fff">Delete</button></div></div>`;
+    modal.innerHTML = `<div class="dlg sm" role="alertdialog" aria-modal="true"><div style="font-size:42px">${icon}</div><h2 style="margin:10px 0">${esc(msg)}</h2><p class="muted">${label === 'Delete' ? 'This cannot be undone.' : 'Please confirm.'}</p><div class="acts" style="justify-content:center;margin-top:20px"><button class="btn ghost" id="no">Cancel</button><button class="btn" id="yes" style="background:var(--err);color:#fff">${label}</button></div></div>`;
     modal.hidden = false; $('#no').focus();
     $('#no').onclick = () => { closeModal(); res(false); }; $('#yes').onclick = () => { closeModal(); res(true); };
   });
@@ -238,8 +250,138 @@ function openForm(ev) {
   };
 }
 
+/* ---------- moi / contributors ---------- */
+const METHODS = ['Cash', 'UPI', 'Bank Transfer', 'Other'];
+let mf = { q: '', event: '', method: '', from: '', to: '', sort: 'date_desc' }, moi = [];
+const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const optList = (arr, v) => arr.map(x => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('');
+async function moiPage() {
+  view.innerHTML = '<div class="sk" style="height:70px;margin-bottom:16px"></div><div class="sk" style="height:300px"></div>';
+  await loadEvents();
+  view.innerHTML = `<div class="page"><div class="head"><div><h1>Moi</h1><p class="muted" id="moiSum">&nbsp;</p></div><button class="btn" id="newMoi">${ic('plus')} Add moi</button></div>
+    <div class="bar"><input id="mq" type="search" placeholder="Search name or mobile" value="${esc(mf.q)}" aria-label="Search contributors">
+    <select id="me" aria-label="Filter by event"><option value="">All events</option>${events.map(e => `<option value="${e.id}" ${e.id == mf.event ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>
+    <select id="mm" aria-label="Filter by payment method"><option value="">All methods</option>${optList(METHODS, mf.method)}</select>
+    <input type="date" id="mfrom" value="${mf.from}" aria-label="From date"><input type="date" id="mto" value="${mf.to}" aria-label="To date">
+    <select id="ms" aria-label="Sort"><option value="date_desc">Newest first</option><option value="amount_desc" ${mf.sort === 'amount_desc' ? 'selected' : ''}>Amount: high to low</option><option value="amount_asc" ${mf.sort === 'amount_asc' ? 'selected' : ''}>Amount: low to high</option></select></div>
+    <div class="panel" style="padding:0"><div class="tw" id="moiTbl"></div></div></div>`;
+  let t; const go = () => loadMoi().catch(e => toast(e.message, 1));
+  $('#newMoi').onclick = () => openMoiForm();
+  $('#mq').oninput = e => { mf.q = e.target.value.trim(); clearTimeout(t); t = setTimeout(go, 250); };
+  $('#me').onchange = e => { mf.event = e.target.value; go(); }; $('#mm').onchange = e => { mf.method = e.target.value; go(); };
+  $('#mfrom').onchange = e => { mf.from = e.target.value; go(); }; $('#mto').onchange = e => { mf.to = e.target.value; go(); };
+  $('#ms').onchange = e => { mf.sort = e.target.value; go(); };
+  $('#moiTbl').onclick = e => {
+    const b = e.target.closest('[data-a]'); if (!b) return;
+    const c = moi.find(x => x.id == b.dataset.id);
+    ({ h: showHistory, r: receipt, e: x => openMoiForm(x), d: removeMoi })[b.dataset.a](c);
+  };
+  await loadMoi();
+}
+async function loadMoi() {
+  const d = await api('/api/contributions?' + new URLSearchParams({ search: mf.q, event_id: mf.event, method: mf.method, from: mf.from, to: mf.to, sort: mf.sort }));
+  moi = d.rows; if (!$('#moiTbl')) return;
+  $('#moiSum').textContent = `${d.count} contribution${d.count === 1 ? '' : 's'} · ${inr(d.total)}`;
+  const btn = (a, i, l, id, cls = '') => `<button class="ibtn sm ${cls}" data-a="${a}" data-id="${id}" aria-label="${l}" title="${l}">${ic(i)}</button>`;
+  $('#moiTbl').innerHTML = moi.length ? `<table class="tbl"><thead><tr><th>Contributor</th><th>Place</th><th>Event</th><th>Method</th><th>Date</th><th class="r">Amount</th><th></th></tr></thead><tbody>${moi.map(c =>
+    `<tr><td><b>${esc(c.contributor_name)}</b><small>${esc(c.mobile || '')}${c.relationship ? (c.mobile ? ' · ' : '') + esc(c.relationship) : ''}</small></td><td>${esc(c.place || '-')}</td><td>${esc(c.event_name)}</td><td><span class="chip">${esc(c.payment_method)}</span></td><td>${fmtDate(c.contribution_date)}</td><td class="r cr">${inr(c.amount)}</td>
+    <td><div class="ra">${btn('h', 'hist', 'History', c.id)}${btn('r', 'print', 'Receipt', c.id)}${btn('e', 'edit', 'Edit', c.id)}${btn('d', 'trash', 'Delete', c.id, 'danger')}</div></td></tr>`).join('')}</tbody></table>`
+    : `<div class="empty"><span class="big">🙏</span>${mf.q || mf.event || mf.method || mf.from || mf.to ? 'No entries match these filters.' : 'No moi entries yet. Add your first one!'}</div>`;
+}
+async function removeMoi(c) {
+  if (!await confirmBox('Delete this moi entry?')) return;
+  try { await api('/api/contributions/' + c.id, { method: 'DELETE' }); toast('Entry deleted.'); loadMoi(); } catch (e) { toast(e.message, 1); }
+}
+function openMoiForm(c, eventId) {
+  if (!events.length) { toast('Create an event first, then add moi.', 1); location.hash = '#/events'; return; }
+  const e = c || { event_id: eventId || '', payment_method: 'Cash', contribution_date: today() }; let busy = false;
+  const v = k => esc(e[k] ?? '');
+  modal.innerHTML = `<form class="dlg" id="mf" novalidate role="dialog" aria-modal="true"><h2 style="font-family:var(--disp);font-size:24px;margin:0">${c ? 'Edit moi' : 'Add moi'}</h2>
+    <div class="f">
+    <label class="w">Contributor name<input name="contributor_name" value="${v('contributor_name')}" maxlength="100" autocomplete="off"></label>
+    <label>Mobile number<input name="mobile" value="${v('mobile')}" inputmode="numeric" maxlength="13" placeholder="Optional"></label>
+    <label>Place / village<input name="place" value="${v('place')}" maxlength="100"></label>
+    <label>Relationship<input name="relationship" value="${v('relationship')}" maxlength="60" placeholder="Uncle, friend…"></label>
+    <label>Event<select name="event_id"><option value="">Select event</option>${events.map(x => `<option value="${x.id}" ${x.id == e.event_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <label>Amount (₹)<input name="amount" type="number" min="1" step="0.01" inputmode="decimal" value="${v('amount')}"></label>
+    <label>Payment method<select name="payment_method">${optList(METHODS, e.payment_method)}</select></label>
+    <label>Date<input type="date" name="contribution_date" value="${v('contribution_date')}"></label>
+    <label class="w">Remarks<input name="remarks" value="${v('remarks')}" maxlength="255"></label></div>
+    <p class="ferr" id="ferr" role="alert"></p>
+    <div class="acts" style="justify-content:flex-end"><button type="button" class="btn ghost" id="cancel">Cancel</button><button class="btn" id="save">${c ? 'Save changes' : 'Save'}</button></div></form>`;
+  modal.hidden = false; $('[name=contributor_name]').focus(); $('#cancel').onclick = closeModal;
+  $('#mf').onsubmit = async s => {
+    s.preventDefault(); if (busy) return;
+    const b = Object.fromEntries(new FormData(s.target)); b.mobile = b.mobile.replace(/[\s-]/g, '').replace(/^\+91/, '');
+    const bad = b.contributor_name.trim().length < 2 ? 'Enter the contributor name.' : b.mobile && !/^[6-9]\d{9}$/.test(b.mobile) ? 'Enter a valid 10-digit mobile number, or leave it empty.' : !b.event_id ? 'Select an event.' : !(Number(b.amount) > 0) ? 'Enter a valid amount.' : !b.contribution_date ? 'Pick the date.' : '';
+    if (bad) return $('#ferr').textContent = bad;
+    busy = true; $('#save').disabled = true; $('#save').textContent = 'Saving…';
+    try {
+      await api(c ? '/api/contributions/' + c.id : '/api/contributions', { method: c ? 'PUT' : 'POST', body: b });
+      closeModal(); toast(c ? 'Entry updated.' : 'Moi saved. Thank you! 🙏');
+      location.hash === '#/moi' ? loadMoi() : route();
+    } catch (x) { busy = false; $('#save').disabled = false; $('#save').textContent = c ? 'Save changes' : 'Save'; $('#ferr').textContent = x.message; }
+  };
+}
+async function showHistory(c) {
+  const d = await api('/api/contributions/history?' + new URLSearchParams({ name: c.contributor_name, mobile: c.mobile || '' }));
+  modal.innerHTML = `<div class="dlg" role="dialog" aria-modal="true"><h2 style="font-family:var(--disp);font-size:24px;margin:0">${esc(c.contributor_name)}</h2>
+    <p class="muted">${esc([c.mobile, c.place].filter(Boolean).join(' · '))}</p>
+    <div class="kv" style="margin:14px 0"><div><small>Total given</small><b>${inr(d.total)}</b></div><div><small>Contributions</small><b>${d.count}</b></div></div>
+    ${d.rows.map(r => `<div class="item"><span class="dot">🙏</span><div class="t"><b>${esc(r.event_name)}</b><small>${fmtDate(r.contribution_date)} · ${esc(r.payment_method)}</small></div><span class="cr">${inr(r.amount)}</span></div>`).join('')}
+    <div class="acts" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost" id="x">Close</button></div></div>`;
+  modal.hidden = false; $('#x').onclick = closeModal; $('#x').focus();
+}
+function receipt(c) {
+  const r = (a, b) => b ? `<div class="row2"><span>${a}</span><span>${esc(b)}</span></div>` : '';
+  modal.innerHTML = `<div class="dlg rc" role="dialog" aria-modal="true"><div class="rh"><b>MOIVORA</b><small>Moi receipt</small></div>
+    ${r('Receipt no.', 'MOI-' + String(c.id).padStart(6, '0'))}${r('Event', c.event_name)}${r('Date', fmtDate(c.contribution_date))}${r('Received from', c.contributor_name)}${r('Place', c.place)}${r('Mobile', c.mobile)}${r('Payment', c.payment_method)}${r('Remarks', c.remarks)}
+    <div class="ramt">${inr(c.amount)}</div><p class="thx">Thank you for your blessings 🙏</p>
+    <div class="acts noprint" style="justify-content:center;margin-top:16px"><button class="btn ghost" id="x">Close</button><button class="btn" id="pr">${ic('print')} Print</button></div></div>`;
+  modal.hidden = false; $('#x').onclick = closeModal;
+  $('#pr').onclick = () => { document.body.classList.add('printing'); print(); document.body.classList.remove('printing'); };
+}
+
+/* ---------- admin panel ---------- */
+async function adminPage() {
+  if (!user || user.role !== 'admin') { view.innerHTML = '<div class="panel empty"><span class="big">🔒</span>This page is for admins only.</div>'; return; }
+  view.innerHTML = '<div class="stats">' + '<div class="sk"></div>'.repeat(6) + '</div><div class="sk" style="height:300px"></div>';
+  const [s, users] = await Promise.all([api('/api/admin/stats'), api('/api/admin/users')]);
+  const cards = [['Total users', s.users, 'users', '#7c3aed'], ['Active users', s.active, 'users', '#059669'], ['New (7 days)', s.recent, 'trend', '#2563eb'], ['Events', s.events, 'cal', '#c026d3'], ['Contributions', s.contributions, 'wallet', '#d99a1d'], ['Total moi (all users)', s.moi, 'wallet', '#e11d48', 1]];
+  const when = d => d ? new Date(d.replace(' ', 'T') + 'Z').toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : 'Never';
+  view.innerHTML = `<div class="page"><div class="head"><div><h1>Admin</h1><p class="muted">Platform overview. Contributor details stay private, only totals are shown.</p></div></div>
+    <div class="stats">${cards.map(([l, v, i, c, m], k) => `<div class="stat" style="--c:${c};animation:rise .5s ${k * .06}s both"><div class="i">${ic(i)}</div><span>${l}</span><b data-n="${v}" data-m="${m ? 1 : 0}">0</b></div>`).join('')}</div>
+    <div class="bar"><input id="uq" type="search" placeholder="Search users by name, email or mobile" aria-label="Search users"></div>
+    <div class="panel" style="padding:0"><div class="tw" id="uTbl"></div></div></div>`;
+  $$('[data-n]').forEach(el => countUp(el, +el.dataset.n, +el.dataset.m));
+  const draw = () => {
+    const k = $('#uq').value.trim().toLowerCase(), list = users.filter(u => !k || (u.full_name + ' ' + u.identifier).toLowerCase().includes(k));
+    $('#uTbl').innerHTML = list.length ? `<table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Events</th><th>Joined</th><th>Last login</th><th>Status</th><th></th></tr></thead><tbody>${list.map(u => `<tr><td><b>${esc(u.full_name)}</b><small>${esc(u.identifier)}</small></td><td><span class="chip">${u.role}</span></td><td>${u.events}</td><td>${fmtDate(u.created_at.slice(0, 10))}</td><td>${when(u.last_login)}</td>
+      <td><span class="${u.is_active ? 'cr' : 'db'}">${u.is_active ? 'Active' : 'Disabled'}</span></td>
+      <td><div class="ra">${u.id === user.id ? '<small>You</small>' : `<button class="btn sm ghost" data-st="${u.id}">${ic('ban')} ${u.is_active ? 'Disable' : 'Enable'}</button>`}<button class="btn sm ghost" data-rp="${u.id}">${ic('key')} Reset password</button></div></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No users found.</div>';
+  };
+  draw(); $('#uq').oninput = draw;
+  $('#uTbl').onclick = async e => {
+    const st = e.target.closest('[data-st]'), rp = e.target.closest('[data-rp]');
+    try {
+      if (st) {
+        const u = users.find(x => x.id == st.dataset.st);
+        if (!await confirmBox(`${u.is_active ? 'Disable' : 'Enable'} ${u.full_name}?`, u.is_active ? 'Disable' : 'Enable', u.is_active ? '🚫' : '✅')) return;
+        await api(`/api/admin/users/${u.id}/status`, { method: 'PATCH', body: { is_active: !u.is_active } }); toast('User updated.'); route();
+      } else if (rp) {
+        const u = users.find(x => x.id == rp.dataset.rp);
+        if (!await confirmBox(`Reset password for ${u.full_name}?`, 'Reset', '🔑')) return;
+        const d = await api(`/api/admin/users/${u.id}/reset-password`, { method: 'POST' });
+        modal.innerHTML = `<div class="dlg sm" role="dialog" aria-modal="true"><div style="font-size:42px">🔑</div><h2 style="margin:10px 0">Temporary password</h2><p class="muted">Share it with ${esc(u.full_name)}. It is shown only once.</p>
+          <p style="font-size:26px;font-weight:700;letter-spacing:.08em;color:var(--gold);margin:16px 0;user-select:all">${esc(d.password)}</p><div class="acts" style="justify-content:center"><button class="btn ghost" id="cp">Copy</button><button class="btn" id="x">Done</button></div></div>`;
+        modal.hidden = false; $('#x').onclick = closeModal; $('#cp').onclick = () => navigator.clipboard.writeText(d.password).then(() => toast('Copied.'));
+      }
+    } catch (x) { toast(x.message, 1); }
+  };
+}
+
 /* ---------- boot ---------- */
 (async () => {
   try { user = await api('/api/auth/me'); await loadEvents(); } catch (e) { return; }
-  renderChrome(); route();
+  renderNav(); renderChrome(); route();
 })();

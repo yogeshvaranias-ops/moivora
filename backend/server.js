@@ -1,16 +1,19 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
+const crypto = require('crypto');
+const { ensureSchema } = require('./schema');
 
 if (!process.env.JWT_SECRET) { console.error('JWT_SECRET missing in .env'); process.exit(1); }
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const db = mysql.createPool({
-  host: process.env.DB_HOST, port: Number(process.env.DB_PORT) || 3306, ssl: process.env.DB_SSL === 'true' ? { minVersion: 'TLSv1.2', rejectUnauthorized: true } : undefined, user: process.env.DB_USER, password: process.env.DB_PASSWORD,
+  host: process.env.DB_HOST, port: Number(process.env.DB_PORT) || 3306, user: process.env.DB_USER, password: process.env.DB_PASSWORD,
+  ssl: process.env.DB_SSL === 'true' ? { minVersion: 'TLSv1.2', rejectUnauthorized: true } : undefined,
   database: process.env.DB_NAME, waitForConnections: true, connectionLimit: 10, dateStrings: true
 });
 const h = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ message: 'Server error. Check the backend console.' }); });
@@ -48,11 +51,17 @@ app.post('/api/auth/login', h(async (req, res) => {
   const [rows] = await db.query('SELECT * FROM users WHERE identifier = ?', [identifier]);
   const u = rows[0];
   if (!u || !(await bcrypt.compare(password, u.password_hash))) return res.status(401).json({ message: 'Invalid email/mobile or password.' });
+  if (!u.is_active) return res.status(403).json({ message: 'Your account is disabled. Please contact the admin.' });
+  await db.query('UPDATE users SET last_login = NOW() WHERE id = ?', [u.id]);
   res.json({ token: sign(u), name: u.full_name });
 }));
-function auth(req, res, next) {
-  try { req.user = jwt.verify((req.headers.authorization || '').replace('Bearer ', ''), process.env.JWT_SECRET); next(); }
-  catch { res.status(401).json({ message: 'Please login again.' }); }
+async function auth(req, res, next) {
+  try {
+    const p = jwt.verify((req.headers.authorization || '').replace('Bearer ', ''), process.env.JWT_SECRET);
+    const [r] = await db.query('SELECT id, role, is_active FROM users WHERE id = ?', [p.id]);
+    if (!r[0] || !r[0].is_active) return res.status(401).json({ message: 'Account disabled or not found.' });
+    req.user = { id: r[0].id, role: r[0].role }; next();
+  } catch { res.status(401).json({ message: 'Please login again.' }); }
 }
 app.get('/api/auth/me', auth, h(async (req, res) => {
   const [rows] = await db.query('SELECT id, full_name, identifier, role FROM users WHERE id = ?', [req.user.id]);
@@ -138,6 +147,99 @@ app.get('/api/dashboard', auth, h(async (req, res) => {
   });
 }));
 
+/* ---------- moi / contributions ---------- */
+const METHODS = ['Cash', 'UPI', 'Bank Transfer', 'Other'];
+const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v || '') && !isNaN(Date.parse(v));
+function cleanMoi(b) {
+  const v = {
+    event_id: Number(b.event_id), contributor_name: String(b.contributor_name || '').trim().slice(0, 100), mobile: normMobile(b.mobile) || null,
+    place: String(b.place || '').trim().slice(0, 100) || null, relationship: String(b.relationship || '').trim().slice(0, 60) || null,
+    amount: Math.round(Number(b.amount) * 100) / 100, payment_method: b.payment_method || 'Cash', contribution_date: b.contribution_date,
+    remarks: String(b.remarks || '').trim().slice(0, 255) || null
+  };
+  let err = null;
+  if (!Number.isInteger(v.event_id) || v.event_id < 1) err = 'Select an event.';
+  else if (v.contributor_name.length < 2) err = 'Enter the contributor name.';
+  else if (v.mobile && !/^[6-9]\d{9}$/.test(v.mobile)) err = 'Enter a valid 10-digit mobile number, or leave it empty.';
+  else if (!(v.amount > 0) || v.amount > 999999999) err = 'Enter a valid amount.';
+  else if (!METHODS.includes(v.payment_method)) err = 'Select a payment method.';
+  else if (!isDate(v.contribution_date)) err = 'Enter a valid contribution date.';
+  return [err, v];
+}
+const MCOLS = ['event_id', 'contributor_name', 'mobile', 'place', 'relationship', 'amount', 'payment_method', 'contribution_date', 'remarks'];
+const num = r => ({ ...r, amount: Number(r.amount) });
+
+app.get('/api/contributions', auth, h(async (req, res) => {
+  const { search, event_id, method, from, to, sort } = req.query;
+  const w = ['c.user_id = ?'], p = [req.user.id];
+  if (search) { w.push('(c.contributor_name LIKE ? OR c.mobile LIKE ?)'); p.push(`%${search}%`, `%${search}%`); }
+  if (event_id) { w.push('c.event_id = ?'); p.push(Number(event_id)); }
+  if (METHODS.includes(method)) { w.push('c.payment_method = ?'); p.push(method); }
+  if (isDate(from)) { w.push('c.contribution_date >= ?'); p.push(from); }
+  if (isDate(to)) { w.push('c.contribution_date <= ?'); p.push(to); }
+  const order = { amount_desc: 'c.amount DESC', amount_asc: 'c.amount ASC' }[sort] || 'c.contribution_date DESC, c.id DESC';
+  const [rows] = await db.query(`SELECT c.*, e.name AS event_name FROM contributions c JOIN events e ON e.id = c.event_id WHERE ${w.join(' AND ')} ORDER BY ${order} LIMIT 1000`, p);
+  res.json({ rows: rows.map(num), count: rows.length, total: rows.reduce((a, r) => a + Number(r.amount), 0) });
+}));
+app.get('/api/contributions/history', auth, h(async (req, res) => {
+  const name = String(req.query.name || '').trim(), mobile = normMobile(req.query.mobile);
+  if (!name && !mobile) return res.json({ rows: [], count: 0, total: 0 });
+  const [rows] = await db.query(`SELECT c.*, e.name AS event_name FROM contributions c JOIN events e ON e.id = c.event_id WHERE c.user_id = ? AND ${mobile ? 'c.mobile = ?' : 'LOWER(c.contributor_name) = LOWER(?)'} ORDER BY c.contribution_date DESC, c.id DESC`, [req.user.id, mobile || name]);
+  res.json({ rows: rows.map(num), count: rows.length, total: rows.reduce((a, r) => a + Number(r.amount), 0) });
+}));
+app.post('/api/contributions', auth, h(async (req, res) => {
+  const [err, v] = cleanMoi(req.body);
+  if (err) return res.status(400).json({ message: err });
+  const [ev] = await db.query('SELECT id FROM events WHERE id = ? AND user_id = ?', [v.event_id, req.user.id]);
+  if (!ev[0]) return res.status(400).json({ message: 'Select a valid event.' });
+  const [dup] = await db.query("SELECT id FROM contributions WHERE user_id = ? AND event_id = ? AND LOWER(contributor_name) = LOWER(?) AND COALESCE(mobile,'') = ? AND amount = ? AND contribution_date = ? AND created_at > (NOW() - INTERVAL 60 SECOND) LIMIT 1",
+    [req.user.id, v.event_id, v.contributor_name, v.mobile || '', v.amount, v.contribution_date]);
+  if (dup[0]) return res.status(409).json({ message: 'Duplicate entry: same person, amount and date was just added.' });
+  const [r] = await db.query(`INSERT INTO contributions (user_id, ${MCOLS.join(',')}) VALUES (?, ${MCOLS.map(() => '?').join(',')})`, [req.user.id, ...MCOLS.map(c => v[c])]);
+  res.status(201).json({ id: r.insertId });
+}));
+app.put('/api/contributions/:id', auth, h(async (req, res) => {
+  const [err, v] = cleanMoi(req.body);
+  if (err) return res.status(400).json({ message: err });
+  const [ev] = await db.query('SELECT id FROM events WHERE id = ? AND user_id = ?', [v.event_id, req.user.id]);
+  if (!ev[0]) return res.status(400).json({ message: 'Select a valid event.' });
+  const [r] = await db.query(`UPDATE contributions SET ${MCOLS.map(c => c + ' = ?').join(',')} WHERE id = ? AND user_id = ?`, [...MCOLS.map(c => v[c]), req.params.id, req.user.id]);
+  r.affectedRows ? res.json({ ok: true }) : res.status(404).json({ message: 'Entry not found.' });
+}));
+app.delete('/api/contributions/:id', auth, h(async (req, res) => {
+  const [r] = await db.query('DELETE FROM contributions WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+  r.affectedRows ? res.json({ ok: true }) : res.status(404).json({ message: 'Entry not found.' });
+}));
+
+/* ---------- admin (counts only, never contributor details) ---------- */
+const adminOnly = (req, res, next) => db.query('SELECT role FROM users WHERE id = ?', [req.user.id])
+  .then(([r]) => (r[0] && r[0].role === 'admin') ? next() : res.status(403).json({ message: 'Admins only.' }))
+  .catch(() => res.status(500).json({ message: 'Server error.' }));
+app.get('/api/admin/stats', auth, adminOnly, h(async (req, res) => {
+  const [[u]] = await db.query('SELECT COUNT(*) AS total, SUM(is_active = 1) AS active, SUM(created_at >= NOW() - INTERVAL 7 DAY) AS recent FROM users');
+  const [[e]] = await db.query('SELECT COUNT(*) AS n FROM events');
+  const [[c]] = await db.query('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS amt FROM contributions');
+  res.json({ users: u.total, active: Number(u.active || 0), recent: Number(u.recent || 0), events: e.n, contributions: c.n, moi: Number(c.amt) });
+}));
+app.get('/api/admin/users', auth, adminOnly, h(async (req, res) => {
+  const [rows] = await db.query('SELECT u.id, u.full_name, u.identifier, u.role, u.is_active, u.created_at, u.last_login, (SELECT COUNT(*) FROM events e WHERE e.user_id = u.id) AS events FROM users u ORDER BY u.created_at DESC');
+  res.json(rows);
+}));
+app.patch('/api/admin/users/:id/status', auth, adminOnly, h(async (req, res) => {
+  if (Number(req.params.id) === req.user.id) return res.status(400).json({ message: 'You cannot disable your own account.' });
+  const [r] = await db.query('UPDATE users SET is_active = ? WHERE id = ?', [req.body.is_active ? 1 : 0, req.params.id]);
+  r.affectedRows ? res.json({ ok: true }) : res.status(404).json({ message: 'User not found.' });
+}));
+app.post('/api/admin/users/:id/reset-password', auth, adminOnly, h(async (req, res) => {
+  const L = 'abcdefghjkmnpqrstuvwxyz', D = '23456789', pick = s => s[crypto.randomInt(s.length)];
+  const temp = [pick(L), pick(D), ...Array.from({ length: 8 }, () => pick(L + D))].sort(() => crypto.randomInt(3) - 1).join('');
+  const [r] = await db.query('UPDATE users SET password_hash = ? WHERE id = ?', [await bcrypt.hash(temp, 10), req.params.id]);
+  r.affectedRows ? res.json({ password: temp }) : res.status(404).json({ message: 'User not found.' });
+}));
+
+app.get(['/admin', '/dashboard', '/events', '/moi'], (req, res) => res.redirect('/app.html#/' + req.path.slice(1)));
 app.use(express.static(path.join(__dirname, '../frontend')));
 const port = process.env.PORT || 5000;
-app.listen(port, () => console.log('MOIVORA running at http://localhost:' + port));
+ensureSchema(db)
+  .then(() => app.listen(port, () => console.log('MOIVORA running at http://localhost:' + port)))
+  .catch(e => { console.error('Database setup failed:', e.code || '', e.message); process.exit(1); });
