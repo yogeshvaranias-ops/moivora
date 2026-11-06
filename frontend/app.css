@@ -103,3 +103,6 @@ input:focus,select:focus,textarea:focus{border-color:var(--gold);box-shadow:0 0 
 body.printing #modal{position:static;background:#fff;padding:0;backdrop-filter:none;display:block}body.printing .dlg{border:0;max-width:none;box-shadow:none;animation:none}}
 
 body.adm .gs,body.adm #bell,body.adm #bellMenu{display:none}body.adm #burger{margin-right:auto}
+
+body.uv .top::before{content:'Admin preview of the user screens';font-size:12px;font-weight:700;padding:6px 12px;border-radius:99px;background:rgba(245,196,81,.18);color:var(--gold);border:1px solid var(--gold);white-space:nowrap}
+@media(max-width:700px){body.uv .top::before{content:'Preview'}}

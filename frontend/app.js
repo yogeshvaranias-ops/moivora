@@ -30,6 +30,7 @@ Object.assign(I, {
 });
 const ic = n => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${I[n]}</svg>`;
 
+let adminUserView = sessionStorage.getItem('moivora_uv') === '1';
 let token = localStorage.getItem('moivora_token'), user = null, events = [], q = '', fType = '', fStatus = '', charts = [], timers = [];
 if (!token) location.replace('/');
 const view = $('#view');
@@ -68,8 +69,14 @@ function countUp(el, to, money) {
 }
 
 /* ---------- chrome: sidebar, topbar, theme ---------- */
+function setUserView(on) {
+  adminUserView = on; on ? sessionStorage.setItem('moivora_uv', '1') : sessionStorage.removeItem('moivora_uv');
+  renderNav(); renderChrome();
+}
 function renderNav() {
-  const NAV = user && user.role === 'admin' ? [['#/admin', 'shield', 'Admin']] : [['#/dashboard', 'home', 'Dashboard'], ['#/events', 'cal', 'Events'], ['#/moi', 'wallet', 'Moi']];
+  const admin = user && user.role === 'admin';
+  const NAV = admin && !adminUserView ? [['#/admin', 'shield', 'Admin']] : [['#/dashboard', 'home', 'Dashboard'], ['#/events', 'cal', 'Events'], ['#/moi', 'wallet', 'Moi']];
+  if (admin && adminUserView) NAV.push(['#/admin', 'shield', 'Back to Admin']);
   $('#nav').innerHTML = NAV.map(([h, i, l]) => `<a class="nav" href="${h}" data-h="${h}">${ic(i)}<span>${l}</span></a>`).join('');
 }
 $('#logout').innerHTML = ic('out') + '<span>Logout</span>';
@@ -85,7 +92,8 @@ document.addEventListener('click', () => $$('.dd').forEach(x => x.classList.remo
 $('#gs').addEventListener('input', e => { q = e.target.value; if (location.hash !== '#/events') location.hash = '#/events'; else renderGrid(); });
 
 function renderChrome() {
-  document.body.classList.toggle('adm', user.role === 'admin');
+  document.body.classList.toggle('adm', user.role === 'admin' && !adminUserView);
+  document.body.classList.toggle('uv', user.role === 'admin' && adminUserView);
   $('#avatar').textContent = (user.full_name || '?')[0].toUpperCase();
   $('#userMenu').innerHTML = `<div class="row"><div><b>${esc(user.full_name)}</b><small>${esc(user.identifier)} · ${esc(user.role)}</small></div></div><button class="row" id="um-out">${ic('out')} Logout</button>`;
   $('#um-out').onclick = logout;
@@ -100,7 +108,10 @@ function route() {
   charts.forEach(c => c.destroy()); charts = []; timers.forEach(clearInterval); timers = [];
   document.body.classList.remove('open');
   const isAdmin = user && user.role === 'admin';
-  if (isAdmin && location.hash !== '#/admin') { location.replace('#/admin'); return; }
+  if (isAdmin) {
+    if (location.hash === '#/admin' && adminUserView) setUserView(false);
+    else if (!adminUserView && location.hash !== '#/admin') { location.replace('#/admin'); return; }
+  }
   const h = location.hash || '#/dashboard', m = h.match(/^#\/events\/(\d+)$/);
   $$('.nav[data-h]').forEach(a => a.classList.toggle('on', h.startsWith(a.dataset.h)));
   const go = m ? eventPage(m[1]) : h === '#/events' ? eventsPage() : h === '#/moi' ? moiPage() : h === '#/admin' ? adminPage() : dashboard();
@@ -349,7 +360,7 @@ async function adminPage() {
   const [s, users] = await Promise.all([api('/api/admin/stats'), api('/api/admin/users')]);
   const cards = [['Total users', s.users, 'users', '#7c3aed'], ['Active users', s.active, 'users', '#059669'], ['New (7 days)', s.recent, 'trend', '#2563eb'], ['Events', s.events, 'cal', '#c026d3'], ['Contributions', s.contributions, 'wallet', '#d99a1d'], ['Total moi (all users)', s.moi, 'wallet', '#e11d48', 1]];
   const when = d => d ? new Date(d.replace(' ', 'T') + 'Z').toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : 'Never';
-  view.innerHTML = `<div class="page"><div class="head"><div><h1>Admin</h1><p class="muted">Platform overview. Contributor details stay private, only totals are shown.</p></div></div>
+  view.innerHTML = `<div class="page"><div class="head"><div><h1>Admin</h1><p class="muted">Platform overview. Contributor details stay private, only totals are shown.</p></div><button class="btn ghost" id="uv">${ic('eye')} User view</button></div>
     <div class="stats">${cards.map(([l, v, i, c, m], k) => `<div class="stat" style="--c:${c};animation:rise .5s ${k * .06}s both"><div class="i">${ic(i)}</div><span>${l}</span><b data-n="${v}" data-m="${m ? 1 : 0}">0</b></div>`).join('')}</div>
     <div class="bar"><input id="uq" type="search" placeholder="Search users by name, email or mobile" aria-label="Search users"></div>
     <div class="panel" style="padding:0"><div class="tw" id="uTbl"></div></div></div>`;
@@ -360,7 +371,7 @@ async function adminPage() {
       <td><span class="${u.is_active ? 'cr' : 'db'}">${u.is_active ? 'Active' : 'Disabled'}</span></td>
       <td><div class="ra">${u.id === user.id ? '<small>You</small>' : `<button class="btn sm ghost" data-st="${u.id}">${ic('ban')} ${u.is_active ? 'Disable' : 'Enable'}</button>`}<button class="btn sm ghost" data-rp="${u.id}">${ic('key')} Reset password</button></div></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No users found.</div>';
   };
-  draw(); $('#uq').oninput = draw;
+  draw(); $('#uq').oninput = draw; $('#uv').onclick = () => { setUserView(true); location.hash = '#/dashboard'; };
   $('#uTbl').onclick = async e => {
     const st = e.target.closest('[data-st]'), rp = e.target.closest('[data-rp]');
     try {
